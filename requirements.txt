@@ -1,4 +1,4 @@
-python-telegram-bot==20.8
+aiogram==3.4.1
 requests
 pandas
-ta==0.8.0
+ta
