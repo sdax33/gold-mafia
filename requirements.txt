@@ -1,0 +1,5 @@
+python-telegram-bot==20.8
+ccxt==2.0.0
+pandas==2.0.0
+smartmoneyconcepts
+ta==0.8.0
