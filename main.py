@@ -7,29 +7,42 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 )
+import asyncio
 
+# إعدادات التسجيل
 logging.basicConfig(level=logging.INFO)
 
+# مفاتيح البيئة
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 TD_API_KEY = os.environ["TD_API_KEY"]
 
+# إعدادات السوق
 SYMBOL = "XAU/USD"
+INTERVAL = "1h"
 
-# جلب البيانات من TwelveData حسب الفاصل الزمني
-def get_market_data(interval: str):
-    url = f"https://api.twelvedata.com/time_series?symbol={SYMBOL}&interval={interval}&apikey={TD_API_KEY}&outputsize=50"
+# استدعاء بيانات السوق
+def get_market_data():
+    url = f"https://api.twelvedata.com/time_series?symbol={SYMBOL}&interval={INTERVAL}&apikey={TD_API_KEY}&outputsize=50"
     response = requests.get(url)
     data = response.json()
-    if "values" not in data:
-        raise ValueError("📛 لا توجد بيانات. السوق ممكن يكون في عطلة.")
-    
-    df = pd.DataFrame(data["values"])
-    df = df.astype(float)
-    return df[::-1]
 
-# التحليل باستخدام Stochastic
+    if "values" not in data:
+        raise Exception(data.get("message", "البيانات غير متوفرة"))
+
+    df = pd.DataFrame(data["values"])
+    
+    # تحويل الأعمدة الرقمية فقط
+    numeric_columns = ["open", "high", "low", "close", "volume"]
+    df[numeric_columns] = df[numeric_columns].astype(float)
+
+    return df[::-1]  # عكس الترتيب ليكون الأحدث في الآخر
+
+# تحليل Stochastic Oscillator
 def analyze_data(df):
-    stoch = StochasticOscillator(close=df["close"], high=df["high"], low=df["low"], window=14, smooth_window=3)
+    stoch = StochasticOscillator(
+        close=df["close"], high=df["high"], low=df["low"],
+        window=14, smooth_window=3
+    )
     k = stoch.stoch()
     d = stoch.stoch_signal()
     last_k = k.iloc[-1]
@@ -42,35 +55,41 @@ def analyze_data(df):
     else:
         return "⏸ لا توجد إشارة واضحة"
 
-# رسالة البدء مع أزرار التحليل
+# زر البدء
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("🔁 تحليل اسكالبينغ", callback_data="scalp")],
-        [InlineKeyboardButton("📈 تحليل سوينغ", callback_data="swing")]
+        [InlineKeyboardButton("⚡️ سكالبينغ", callback_data="scalp")],
+        [InlineKeyboardButton("📈 سوينغ", callback_data="swing")]
     ]
-    await update.message.reply_text("اختار نوع التحليل:", reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text(
+        "مرحبًا بك في بوت تحليل السوق!\nاختر نوع التحليل:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
-# التعامل مع الأزرار
+# عند الضغط على زر
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    interval = "15min" if query.data == "scalp" else "1h"
+    if query.data in ["scalp", "swing"]:
+        try:
+            df = get_market_data()
+            signal = analyze_data(df)
+            await query.edit_message_text(text=f"📊 نتيجة تحليل {query.data}:\n\n{signal}")
+        except Exception as e:
+            await query.edit_message_text(
+                text=f"⚠️ السوق يبدو في عطلة أو حدث خطأ.\n"
+                     f"📆 يُتوقع أن يفتح يوم الإثنين صباحًا.\n\n"
+                     f"🔍 التفاصيل: {str(e)}"
+            )
 
-    try:
-        df = get_market_data(interval)
-        signal = analyze_data(df)
-        await query.edit_message_text(text=f"🔍 نوع التحليل: {query.data.upper()}\n📊 نتيجة:\n{signal}")
-    except Exception as e:
-        await query.edit_message_text(
-            text=f"⚠️ السوق يبدو في عطلة أو حدث خطأ.\n📆 يُتوقع أن يفتح يوم الإثنين صباحًا.\n\n🔍 التفاصيل: {str(e)}"
-        )
-
-def main():
+# تشغيل البوت
+async def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+    await app.bot.delete_webhook(drop_pending_updates=True)  # منع التعارض
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
-    app.run_polling()
+    await app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
