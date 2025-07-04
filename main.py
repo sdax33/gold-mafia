@@ -8,30 +8,26 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 )
 
-# إعدادات التسجيل
 logging.basicConfig(level=logging.INFO)
 
-# متغيرات البيئة
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 TD_API_KEY = os.environ["TD_API_KEY"]
 
-# إعدادات السوق
 SYMBOL = "XAU/USD"
-INTERVAL = "1h"
 
-# استدعاء بيانات من Twelve Data
-def get_market_data():
-    url = f"https://api.twelvedata.com/time_series?symbol={SYMBOL}&interval={INTERVAL}&apikey={TD_API_KEY}&outputsize=50"
+# جلب البيانات من TwelveData حسب الفاصل الزمني
+def get_market_data(interval: str):
+    url = f"https://api.twelvedata.com/time_series?symbol={SYMBOL}&interval={interval}&apikey={TD_API_KEY}&outputsize=50"
     response = requests.get(url)
     data = response.json()
+    if "values" not in data:
+        raise ValueError("📛 لا توجد بيانات. السوق ممكن يكون في عطلة.")
+    
     df = pd.DataFrame(data["values"])
-
-    # حذف عمود التاريخ قبل التحويل لأرقام
-    df = df.drop(columns=["datetime"])
     df = df.astype(float)
     return df[::-1]
 
-# تحليل بسيط باستخدام Stochastic Oscillator
+# التحليل باستخدام Stochastic
 def analyze_data(df):
     stoch = StochasticOscillator(close=df["close"], high=df["high"], low=df["low"], window=14, smooth_window=3)
     k = stoch.stoch()
@@ -46,24 +42,30 @@ def analyze_data(df):
     else:
         return "⏸ لا توجد إشارة واضحة"
 
-# زر البوت
+# رسالة البدء مع أزرار التحليل
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton("📊 تحليل السوق", callback_data="analyze")]]
-    await update.message.reply_text("مرحبًا! اضغط الزر لبدء التحليل:", reply_markup=InlineKeyboardMarkup(keyboard))
+    keyboard = [
+        [InlineKeyboardButton("🔁 تحليل اسكالبينغ", callback_data="scalp")],
+        [InlineKeyboardButton("📈 تحليل سوينغ", callback_data="swing")]
+    ]
+    await update.message.reply_text("اختار نوع التحليل:", reply_markup=InlineKeyboardMarkup(keyboard))
 
+# التعامل مع الأزرار
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if query.data == "analyze":
-        try:
-            df = get_market_data()
-            signal = analyze_data(df)
-            await query.edit_message_text(text=f"نتيجة التحليل:\n{signal}")
-        except Exception as e:
-            await query.edit_message_text(text=f"⚠️ حصل خطأ: {str(e)}")
+    interval = "15min" if query.data == "scalp" else "1h"
 
-# Main
+    try:
+        df = get_market_data(interval)
+        signal = analyze_data(df)
+        await query.edit_message_text(text=f"🔍 نوع التحليل: {query.data.upper()}\n📊 نتيجة:\n{signal}")
+    except Exception as e:
+        await query.edit_message_text(
+            text=f"⚠️ السوق يبدو في عطلة أو حدث خطأ.\n📆 يُتوقع أن يفتح يوم الإثنين صباحًا.\n\n🔍 التفاصيل: {str(e)}"
+        )
+
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
