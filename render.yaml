@@ -1,7 +1,1 @@
-services:
-  - type: web
-    name: gold-mafia-bot
-    env: python
-    plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: python main.py
+
