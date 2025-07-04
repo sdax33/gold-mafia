@@ -1,73 +1,105 @@
-import os, logging, asyncio
+import os
+import logging
+import requests
 import pandas as pd
-import ccxt
-from smartmoneyconcepts import smc
 from ta.momentum import StochasticOscillator
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler
 
+# ✅ إعدادات
 logging.basicConfig(level=logging.INFO)
+API_KEY = os.getenv("TD_API_KEY")  # Twelve Data API Key
+SYMBOL = "XAU/USD"
+INTERVAL = "1h"
 
-# جلب داتا من Binance
-exchange = ccxt.binance({
-    'enableRateLimit': True,
-})
+# ✅ جلب بيانات السوق من Twelve Data
+def fetch_market_data():
+    url = f"https://api.twelvedata.com/time_series?symbol={SYMBOL}&interval={INTERVAL}&outputsize=100&apikey={API_KEY}"
+    response = requests.get(url).json()
+    if "values" not in response:
+        raise Exception(f"خطأ في جلب البيانات: {response}")
 
-async def fetch_ohlc(symbol="XAU/USDT", timeframe="1h", limit=200):
-    bars = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-    df = pd.DataFrame(bars, columns=["timestamp","open","high","low","close","volume"])
-    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+    df = pd.DataFrame(response["values"])
+    df.rename(columns={
+        "datetime": "timestamp",
+        "open": "open",
+        "high": "high",
+        "low": "low",
+        "close": "close",
+        "volume": "volume"
+    }, inplace=True)
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df = df.sort_values("timestamp")
+    df[["open", "high", "low", "close", "volume"]] = df[["open", "high", "low", "close", "volume"]].astype(float)
     return df
 
-def analyze(df):
-    df2 = df.copy()
-    fvg = smc.fvg(df2, join_consecutive=False)
-    swings = smc.swing_highs_lows(df2)
-    bos = smc.bos_choch(df2, swings)
-    obs = smc.ob(df2, swings)
-    st = StochasticOscillator(df2["high"], df2["low"], df2["close"], window=14, smooth_window=3)
-    df2["stoch_k"] = st.stoch()
-    df2["stoch_d"] = st.stoch_signal()
-    return df2, fvg, obs, df2["stoch_k"].iloc[-1], df2["stoch_d"].iloc[-1], bos["BOS"].iloc[-1]
+# ✅ كشف FVG (فجوات القيمة العادلة)
+def detect_fvg(df):
+    for i in range(2, len(df)):
+        prev_high = df["high"].iloc[i - 2]
+        curr_low = df["low"].iloc[i]
+        if prev_high < curr_low:
+            return f"📈 FVG صاعد عند {df['timestamp'].iloc[i]}"
+        prev_low = df["low"].iloc[i - 2]
+        curr_high = df["high"].iloc[i]
+        if prev_low > curr_high:
+            return f"📉 FVG هابط عند {df['timestamp'].iloc[i]}"
+    return "❌ لا توجد FVG حالياً"
 
-async def generate_signal(mode):
-    df, fvg, obs, st_k, st_d, bos = await asyncio.get_event_loop().run_in_executor(None, analyze, await fetch_ohlc())
-    last_fvg = fvg.iloc[-1]
-    last_ob = obs.iloc[-1]
-    trend = "شراء" if bos == 1 else "بيع"
-    st_signal = ""
-    if st_k > 80 and st_d > 80: st_signal = "تشبع شراء"
-    elif st_k < 20 and st_d < 20: st_signal = "تشبع بيع"
-    
-    reason = f"FVG={last_fvg:.0f}, OrderBlock={last_ob:.0f}, Stochastic={st_signal}"
-    # السكالب: توصية فورية
-    if mode == "scalp":
-        action = "ادخل شراء" if bos == 1 else "ادخل بيع"
-        return (action, reason, "Stop Loss عند سعر قريب", "Take Profit: نسبه قصيرة")
-    # السوينغ: توصية أطول
+# ✅ كشف Order Block
+def detect_order_block(df):
+    bearish_candles = df[df["close"] < df["open"]]
+    if bearish_candles.empty:
+        return "❌ لا يوجد Order Block"
+    last_ob = bearish_candles.iloc[-1]
+    return f"🧱 OB هابط عند {last_ob['timestamp']} (Open={last_ob['open']:.2f}, Close={last_ob['close']:.2f})"
+
+# ✅ تحليل كامل للسوق
+def analyze_market(df):
+    # Stochastic
+    stoch = StochasticOscillator(df["high"], df["low"], df["close"], window=14, smooth_window=3)
+    df["stoch_k"] = stoch.stoch()
+    df["stoch_d"] = stoch.stoch_signal()
+    st_k = df["stoch_k"].iloc[-1]
+    st_d = df["stoch_d"].iloc[-1]
+
+    # إشارات Stochastic
+    if st_k > 80 and st_d > 80:
+        signal = "✅ توصية: ادخل بيع (تشبع شراء)"
+    elif st_k < 20 and st_d < 20:
+        signal = "✅ توصية: ادخل شراء (تشبع بيع)"
     else:
-        sl = df["low"].iloc[-1] if bos==1 else df["high"].iloc[-1]
-        tp = df["close"].iloc[-1] + (df["close"].iloc[-1] - sl)*2 if bos==1 else df["close"].iloc[-1] - (sl - df["close"].iloc[-1])*2
-        return (trend, reason, sl, tp)
+        signal = "⏳ توصية: انتظر (لا توجد إشارة واضحة)"
 
+    # FVG و OB
+    fvg = detect_fvg(df)
+    ob = detect_order_block(df)
+
+    # النص النهائي
+    final = f"{signal}\n\n📊 Stoch K: {st_k:.2f}\n📊 Stoch D: {st_d:.2f}\n\n{fvg}\n{ob}"
+    return final
+
+# ✅ أوامر Telegram
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kb = [[InlineKeyboardButton("🔸 سكالب", callback_data="scalp")],
-          [InlineKeyboardButton("🔹 سوينغ", callback_data="swing")]]
-    await update.message.reply_text("ابدأ تحليلك مع بوت S A (gold mafia)", reply_markup=InlineKeyboardMarkup(kb))
+    keyboard = [
+        [InlineKeyboardButton("🔸 سكالب", callback_data="scalp")],
+        [InlineKeyboardButton("🔹 سوينغ", callback_data="swing")]
+    ]
+    await update.message.reply_text("ابدأ تحليلك مع بوت S A (gold mafia)", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    mode = q.data
-    await q.edit_message_text(f"📊 جاري تحليل السوق لوضع {mode}...")
-    action, reason, sl, tp = await generate_signal(mode)
-    text = f"📌 *{ 'سكالب' if mode=='scalp' else 'سُوينغ'} توصية:*\n" \
-           f"{action}\n" \
-           f"🔍 السبب: {reason}\n" \
-           f"🛑 Stop Loss: {sl}\n" \
-           f"🏁 Take Profit: {tp}"
-    await q.message.reply_text(text, parse_mode="Markdown")
+    await q.edit_message_text("🔍 جاري تحليل السوق الحقيقي...")
 
+    try:
+        df = fetch_market_data()
+        result = analyze_market(df)
+        await q.message.reply_text(result)
+    except Exception as e:
+        await q.message.reply_text(f"❌ حصل خطأ أثناء التحليل:\n{str(e)}")
+
+# ✅ تشغيل البوت
 def main():
     token = os.getenv("BOT_TOKEN")
     app = ApplicationBuilder().token(token).build()
