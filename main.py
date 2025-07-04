@@ -25,6 +25,9 @@ def get_market_data():
     response = requests.get(url)
     data = response.json()
     df = pd.DataFrame(data["values"])
+
+    # حذف عمود التاريخ قبل التحويل لأرقام
+    df = df.drop(columns=["datetime"])
     df = df.astype(float)
     return df[::-1]
 
