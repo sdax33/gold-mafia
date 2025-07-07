@@ -2,14 +2,17 @@ import os
 import logging
 import requests
 import pandas as pd
+from datetime import datetime, timedelta
 from ta.momentum import StochasticOscillator
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 )
 
+# إعدادات التسجيل
 logging.basicConfig(level=logging.INFO)
 
+# مفاتيح البيئة
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 TD_API_KEY = os.environ["TD_API_KEY"]
 SYMBOL = "XAU/USD"
@@ -24,13 +27,24 @@ def get_market_data(interval: str):
         raise ValueError("📛 لا توجد بيانات. السوق ممكن يكون في عطلة.")
 
     df = pd.DataFrame(data["values"])
-    # تحويل الأعمدة الرقمية فقط
-    for col in ["open", "high", "low", "close", "volume"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # تحويل الأعمدة الرقمية فقط إذا كانت موجودة
+    numeric_cols = ["open", "high", "low", "close", "volume"]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
     df = df.dropna().iloc[::-1].reset_index(drop=True)
+
+    # التحقق من أن البيانات حديثة (ليست من أيام العطلة)
+    last_time = pd.to_datetime(df["datetime"].iloc[-1])
+    now = datetime.utcnow()
+    if (now - last_time) > timedelta(hours=12):
+        raise ValueError(f"🕓 البيانات قديمة (آخر تحديث: {last_time}). احتمال السوق ما شغال.")
+
     return df
 
-# التحليل الفني - نفس الطريقة لكل من السكالب والسوينغ
+# التحليل الفني
 def analyze_data(df, mode="scalp"):
     stoch = StochasticOscillator(close=df["close"], high=df["high"], low=df["low"], window=14, smooth_window=3)
     k = stoch.stoch()
@@ -47,11 +61,7 @@ def analyze_data(df, mode="scalp"):
         trend = "⏸ لا توجد إشارة واضحة"
 
     # توصية بناءً على نوع الصفقة
-    if mode == "scalp":
-        recommendation = "💡 هذه إشارة قصيرة المدى (سكالبينغ)"
-    else:
-        recommendation = "📊 هذه إشارة طويلة المدى (سوينغ)"
-
+    recommendation = "💡 هذه إشارة قصيرة المدى (سكالبينغ)" if mode == "scalp" else "📊 هذه إشارة طويلة المدى (سوينغ)"
     return f"{trend}\n{recommendation}"
 
 # /start
