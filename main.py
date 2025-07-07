@@ -19,12 +19,13 @@ def get_market_data(interval: str):
     response = requests.get(url)
     data = response.json()
 
-    if "values" not in data:
-        raise ValueError("📛 لا توجد بيانات. السوق ممكن يكون في عطلة.")
+    # حذف التحقق الصارم – هنحاول نحلل حتى لو ناقصة
+    df = pd.DataFrame(data.get("values", []))
+    if df.empty:
+        raise ValueError("❗ مافي بيانات كافية للتحليل.")
 
-    df = pd.DataFrame(data["values"])
     for col in ["open", "high", "low", "close", "volume"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+        df[col] = pd.to_numeric(df.get(col, 0), errors="coerce")
     df = df.dropna().iloc[::-1].reset_index(drop=True)
     return df
 
@@ -32,32 +33,41 @@ def analyze_data(df, mode="scalp"):
     result = []
 
     # Stochastic
-    stoch = StochasticOscillator(close=df["close"], high=df["high"], low=df["low"], window=14, smooth_window=3)
-    k = stoch.stoch()
-    d = stoch.stoch_signal()
-    last_k, last_d = k.iloc[-1], d.iloc[-1]
+    try:
+        stoch = StochasticOscillator(close=df["close"], high=df["high"], low=df["low"], window=14, smooth_window=3)
+        k = stoch.stoch()
+        d = stoch.stoch_signal()
+        last_k, last_d = k.iloc[-1], d.iloc[-1]
 
-    if last_k > 80 and last_d > 80:
-        result.append("📉 Overbought (Stochastic): احتمال نزول")
-    elif last_k < 20 and last_d < 20:
-        result.append("📈 Oversold (Stochastic): احتمال صعود")
-    else:
-        result.append("⏸ لا توجد إشارة واضحة من Stochastic")
+        if last_k > 80 and last_d > 80:
+            result.append("📉 Overbought (Stochastic): احتمال نزول")
+        elif last_k < 20 and last_d < 20:
+            result.append("📈 Oversold (Stochastic): احتمال صعود")
+        else:
+            result.append("⏸ لا توجد إشارة واضحة من Stochastic")
+    except:
+        result.append("⚠️ فشل في حساب Stochastic")
 
     # دعم ومقاومة
-    support = df["low"].rolling(window=10).min().iloc[-1]
-    resistance = df["high"].rolling(window=10).max().iloc[-1]
-    current_price = df["close"].iloc[-1]
-    if current_price <= support * 1.01:
-        result.append("🟢 السعر قريب من الدعم")
-    elif current_price >= resistance * 0.99:
-        result.append("🔴 السعر قريب من المقاومة")
+    try:
+        support = df["low"].rolling(window=10).min().iloc[-1]
+        resistance = df["high"].rolling(window=10).max().iloc[-1]
+        current_price = df["close"].iloc[-1]
+        if current_price <= support * 1.01:
+            result.append("🟢 السعر قريب من الدعم")
+        elif current_price >= resistance * 0.99:
+            result.append("🔴 السعر قريب من المقاومة")
+    except:
+        result.append("⚠️ فشل في حساب الدعم والمقاومة")
 
     # Order Block بسيط
-    if (df["low"].iloc[-2] > df["high"].iloc[-3]) and (df["open"].iloc[-1] > df["close"].iloc[-1]):
-        result.append("🟤 احتمال وجود Order Block بيعي")
-    if (df["high"].iloc[-2] < df["low"].iloc[-3]) and (df["open"].iloc[-1] < df["close"].iloc[-1]):
-        result.append("🟢 احتمال وجود Order Block شرائي")
+    try:
+        if (df["low"].iloc[-2] > df["high"].iloc[-3]) and (df["open"].iloc[-1] > df["close"].iloc[-1]):
+            result.append("🟤 احتمال وجود Order Block بيعي")
+        if (df["high"].iloc[-2] < df["low"].iloc[-3]) and (df["open"].iloc[-1] < df["close"].iloc[-1]):
+            result.append("🟢 احتمال وجود Order Block شرائي")
+    except:
+        result.append("⚠️ فشل في اكتشاف Order Block")
 
     # نسبة النجاح
     accuracy = "🔢 نسبة نجاح متوقعة: 92%" if mode == "scalp" else "🔢 نسبة نجاح متوقعة: 88%"
@@ -89,9 +99,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         signal = analyze_data(df, mode=mode)
         await query.edit_message_text(text=f"🔍 نوع التحليل: {mode.upper()}\n\n{signal}")
     except Exception as e:
-        await query.edit_message_text(
-            text=f"⚠️ السوق يبدو في عطلة أو حدث خطأ.\n📆 يُتوقع أن يفتح يوم الإثنين صباحًا.\n\n🔍 التفاصيل: {str(e)}"
-        )
+        await query.edit_message_text(text=f"⚠️ تعذر تنفيذ التحليل.\n\n🔍 التفاصيل: {str(e)}")
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
