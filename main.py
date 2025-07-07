@@ -104,17 +104,16 @@ def analyze_data(df, mode="scalp"):
     active_score = sum(weights.get(sig, 0) for sig in signals)
     confidence = int((active_score / max_score) * 100)
 
-    if confidence >= 70:
-        direction = "🔼 شراء" if is_buy else "🔽 بيع"
-        result.append(f"\n📊 القرار النهائي: {direction}")
-        result.append(f"✅ نسبة النجاح المتوقعة: {confidence}%")
-        sl = current_price * (0.995 if is_buy else 1.005)
-        tp = current_price * (1.01 if is_buy else 0.99)
-        result.append(f"🎯 نقطة الدخول: {current_price:.2f}")
-        result.append(f"🛑 وقف الخسارة: {sl:.2f}")
-        result.append(f"🎯 الهدف (TP): {tp:.2f}")
-    else:
-        result.append(f"⌛ لا توجد صفقة قوية الآن، نسبة النجاح {confidence}٪ — يُفضل الانتظار.")
+    # Always show a trade suggestion
+    direction = "🔼 شراء" if is_buy else "🔽 بيع" if is_sell else "❓ غير واضح"
+    result.append(f"\n📊 القرار النهائي: {direction}")
+    result.append(f"📉 نسبة النجاح المتوقعة: {confidence}%")
+
+    sl = current_price * (0.995 if is_buy else 1.005)
+    tp = current_price * (1.01 if is_buy else 0.99)
+    result.append(f"🎯 نقطة الدخول: {current_price:.2f}")
+    result.append(f"🛑 وقف الخسارة: {sl:.2f}")
+    result.append(f"🎯 الهدف (TP): {tp:.2f}")
 
     result.append("💡 سكالبينغ (صفقة قصيرة)" if mode == "scalp" else "📈 سوينغ (صفقة طويلة)")
     return "\n".join(result)
