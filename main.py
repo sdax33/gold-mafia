@@ -23,7 +23,7 @@ def get_market_data(interval: str):
         raise ValueError("📛 لا توجد بيانات. السوق ممكن يكون في عطلة.")
 
     df = pd.DataFrame(data["values"])
-    for col in ["open", "high", "low", "close", "volume"]:
+    for col in ["open", "high", "low", "close"]:  # volume removed
         df[col] = pd.to_numeric(df[col], errors="coerce")
     df = df.dropna().iloc[::-1].reset_index(drop=True)
     return df
